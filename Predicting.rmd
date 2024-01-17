@@ -1,0 +1,523 @@
+---
+title: "Predictive Analysis Project_Group 2"
+author: "Phùng Quang Anh, Lê Bảo Trung, Phạm Hoàng Long, Ngô Gia Tráng, Nguyễn Anh Dũng"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_download: true
+    # code_folding: hide
+    highlight: pygments
+    # number_sections: yes
+    theme: "flatly"
+    toc: TRUE
+    toc_float: TRUE
+---
+
+# Import dataset
+```{r}
+#Install and download the necessary packages
+library(dplyr)
+library(stringr)
+library(rio)
+library(broom)
+library(tidyr)
+library(caret)
+library(stats)
+library(MASS)
+library(readxl)  
+library(mlbench)
+library(ggplot2)
+library(psych)
+library(magrittr)
+library(tree)
+```
+
+```{r}
+#Import data
+training <- read.csv("C:/Users/84974/QuangAnhPhung/Documents/ACTUARY NĂM 4/PA (Predictive Analytics)/Final exam/training_set.csv")
+test <- read.csv("C:/Users/84974/QuangAnhPhung/Documents/ACTUARY NĂM 4/PA (Predictive Analytics)/Final exam/test_set.csv")
+attach(training)
+attach(test)
+```
+
+
+# Question 1: Data preprocessing
+## a. name: extract the car brand and make it a new feature in replacement of the original feature
+```{r}
+training = training %>%
+  mutate(name = word(name, 1, sep = " "))
+test = test %>%
+  mutate(name = word(name, 1, sep = " "))
+```
+
+## b.mileage & engine & max_power: keep only the numeric value and get rid of characters
+```{r}
+training = training %>%
+  mutate(mileage = as.numeric(gsub("[^0-9.]", "", mileage)),
+         engine = as.numeric(gsub("[^0-9]", "", engine)),
+         max_power = as.numeric(gsub("[^0-9.]", "", max_power)))
+
+test = test %>%
+  mutate(mileage = as.numeric(gsub("[^0-9.]", "", mileage)),
+         engine = as.numeric(gsub("[^0-9]", "", engine)),
+         max_power = as.numeric(gsub("[^0-9.]", "", max_power)))
+
+```
+## c.torque: create 2 features, one "nm" with Nm values and one "rpm" with rpm values. In case, they are 2 rpm values, calculate the average of these values.
+```{r}
+#Remove dirty observations which doesn't include Nm or rpm
+
+training = training %>%
+  mutate(torque = ifelse(grepl("Nm", torque, ignore.case = TRUE), torque, ""),
+         torque = ifelse(grepl("rpm", torque, ignore.case = TRUE), torque, ""))
+
+test = test %>%
+  mutate(torque = ifelse(grepl("Nm", torque, ignore.case = TRUE), torque, ""),
+         torque = ifelse(grepl("rpm", torque, ignore.case = TRUE), torque, ""))
+
+#Split into 2 columns named "Nm" and "rpm"
+training= separate(training, torque, into = c("Nm", "rpm"), sep ="@|/|at", convert =TRUE, extra = "merge" )
+
+test= separate(test, torque, into = c("Nm", "rpm"), sep ="@|/|at", convert =TRUE, extra = "merge" )
+
+#Function for Nm calculation
+Nm_convert = function(text) {
+  if (is.na(text)){
+    result= NA
+  } else {
+    result = as.numeric(substring(text,1,regexpr("Nm", text,ignore.case = TRUE)-1))
+  }
+  return(result)
+}
+
+# Function for rpm calculation
+rpm_convert = function(text) {
+  if (is.na(text)){
+    result= NA
+  } else if (gsub("[0-9]", "", text)=="+/-"){
+    result = as.numeric(substring(text,1,regexpr("+/-", text,ignore.case = TRUE)-2))
+  } else {
+    numbers = as.numeric(unlist(str_extract_all(text, "\\d+")))
+    if (length(numbers) == 2) {
+      result = mean(numbers)
+    } else if (length(numbers) == 1) {
+      result = numbers[1]
+    } else {
+      result = NA
+    }
+  }
+  return(result)
+}
+#Apply Nm function for the dataset
+training = training %>%
+  mutate(Nm=sapply(Nm, Nm_convert))
+
+test = test %>%
+  mutate(Nm=sapply(Nm, Nm_convert))
+
+#Apply the rpm function to the dataset
+training = training %>%
+  mutate(rpm=sapply(rpm, rpm_convert))
+
+test = test %>%
+  mutate(rpm=sapply(rpm, rpm_convert))
+```
+
+## d.Removing rows for which data is missing or dirty.
+```{r}
+#Remove NA and dirty values
+training<-na.omit(training)
+test<-na.omit(test)
+```
+
+## e. Removing duplicates
+```{r}
+#Remove duplicate
+training<- distinct(training)
+test<- distinct(test)
+
+```
+
+# Convert character columns to factor
+```{r warning=FALSE}
+#Final dataset
+
+factor_type = c("name","fuel","seller_type","transmission","owner","year","seats") 
+training[factor_type] =lapply(training[factor_type],as.factor)
+test[factor_type] = lapply(test[factor_type],as.factor)
+
+num_type = c("km_driven","selling_price","mileage","engine","max_power","Nm","rpm") 
+training[num_type] =lapply(training[num_type],as.numeric)
+test[num_type] = lapply(test[num_type],as.numeric)
+
+
+# Remove observation of seats in test set which are not included in training set
+train_seats <- unique(training$seats)
+filtered_test_seats <- test %>% anti_join(training, by = "seats")
+test <- test %>% filter(!seats %in% filtered_test_seats$seats)
+# Final dataset
+cleaned_training <- training
+cleaned_test <- test
+```
+
+
+
+# Question 2: Linear regression  
+## Build linear regression on the training set 
+```{r}
+
+#training a linear regression on the training set
+lm <- lm(selling_price ~ ., data = cleaned_training)
+```
+
+## a.	Using MSE, compare the training metric with the test metric and conclude about overfitting
+```{r}
+#Calculate MSE on training set
+pred_lm_training = predict(lm, cleaned_training)
+mse_lm_training = mean((cleaned_training$selling_price - pred_lm_training)^2)
+print(mse_lm_training)
+
+#Calculate MSE on test dataset
+pred_lm_test = predict(lm, cleaned_test)
+mse_lm_test = mean((cleaned_test$selling_price - pred_lm_test)^2)
+print(mse_lm_test)
+
+
+# Creating dataframe including actual and predicted price
+results_test_lm <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_lm_test)
+
+#Scatter Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test_lm, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set") +
+  theme_minimal()
+```
+
+## b.Analyze the validity of the model, using a F-test at a p-value’s threshold of 5%
+```{r}
+#Display model summary and conclude about the P-value of F-test
+summary(lm)
+```
+
+
+## c. Analyze the coefficient’s significance, using a t-test at a p-value’s threshold of 5%. Exclude the features that should be excluded  so to build your final model
+```{r}
+# Set significance threshold (0.05)
+#Backward stepwise 
+backward_model <- stepAIC(lm, scope = list(upper = lm, lower = ~1), direction = "backward", criterion = "p-value", threshold = 0.05)
+# Identify significant variables
+selected_variables <- names(coef(backward_model))
+print(selected_variables)
+
+#New model
+final_lm <- lm(selling_price~.- rpm, data = cleaned_training)
+summary(final_lm)
+```
+
+## d.	Repeat steps a-b-c for your final model
+```{r}
+#Calculate MSE on training dataset using final model
+pred_lm_training_final = predict(final_lm, cleaned_training)
+mean((cleaned_training$selling_price - pred_lm_training_final)^2)
+
+#Calculate MSE on test dataset using final model
+pred_lm_test_final = predict(final_lm, cleaned_test)
+mean((cleaned_test$selling_price - pred_lm_test_final)^2)
+
+# Creating dataframe including actual and predicted price
+results_test_lm_final <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_lm_test_final)
+
+#Scatter Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test_lm_final, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set") +
+  theme_minimal()
+
+
+```
+
+
+# Question 3: Elastic net
+```{r}
+# Extract numeric and non-numeric columns
+numeric_columns <- c("selling_price", "km_driven", "mileage", "engine", "max_power", "Nm", "rpm")
+non_numeric_columns <- c("name", "fuel", "seller_type", "transmission", "owner")
+factor_columns <- c("year", "seats")
+
+# Scale numeric columns
+scaled_train <- scale(cleaned_training[, numeric_columns])
+scaled_test <- scale(cleaned_test[, numeric_columns])
+
+
+# Combine scaled numeric columns with non-numeric columns and factor columns
+training_scaled <- data.frame(
+  cleaned_training[, non_numeric_columns],
+  scaled_train,
+  cleaned_training[, factor_columns, drop = FALSE]  # Use 'drop = FALSE' to keep factors as a data frame
+)
+
+test_scaled <- data.frame(
+  cleaned_test[, non_numeric_columns],
+  scaled_test,
+  cleaned_test[, factor_columns, drop = FALSE]  # Use 'drop = FALSE' to keep factors as a data frame
+)
+```
+## a.	Based on cross-validation (5 folds), check for the best value of the l1-l2 allocation (𝜃) and quantity of regularization (𝜆) and create a model accordingly based on the error 
+```{r}
+training.control=trainControl(method="repeatedcv",
+                           number=5 ,# cross-validation (5 folds)
+                           repeats = 5,
+                           verboseIter = T)
+
+# training ELastic Net Regression model
+elastic_net_model <- train(selling_price ~ ., 
+                           training_scaled, 
+                           method = "glmnet", 
+                           trControl = training.control) 
+#Fitting alpha = 0.1, lambda = 0.0139 on full training set
+
+# The best value
+print(elastic_net_model$bestTune)
+```
+
+## b.	Based on your final model, using MSE, compare the training metric with the test metric and conclude about overfitting 
+
+```{r warning=FALSE}
+
+# Calculate the MSE, performance for training set
+pred_elastic_training_scale = predict(elastic_net_model, training_scaled)
+pred_elastic_training= pred_elastic_training_scale*sd(cleaned_training$selling_price) + mean(cleaned_training$selling_price)
+mean((pred_elastic_training - cleaned_training$selling_price)^2)
+
+# Calculate MSE, performance for test set
+pred_elastic_test_scale = predict(elastic_net_model, test_scaled)
+pred_elastic_test= pred_elastic_test_scale*sd(cleaned_test$selling_price) + mean(cleaned_test$selling_price)
+mean((pred_elastic_test - cleaned_test$selling_price)^2)
+
+
+
+# Creating dataframe including actual and predicted price
+results_test_elastic <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_elastic_test)
+
+#Scatter Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test_elastic, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set") +
+  theme_minimal()
+```
+
+## c. List the features kept in your model as well as their coefficients
+
+```{r}
+
+# Extract variable importance
+importance <- varImp(elastic_net_model)
+print(importance)
+# Extract coefficients
+coef <- coef(elastic_net_model$finalModel,s=elastic_net_model$finalModel$lambdaOpt)
+print(coef)
+```
+
+
+
+
+
+# Question 4: Decision tree
+## Build regression tree model on the training set
+```{r}
+# Fit a regression tree with target variable "selling_price", all predictors is included
+#Tree model
+tree_model <- tree(selling_price ~ ., data = cleaned_training)
+summary(tree_model)
+
+## Plot the tree
+plot(tree_model)
+text(tree_model, pretty = 0.5)
+```
+
+## a,b.	Using MSE, compare the training metric with the test metric and conclude about overfitting
+```{r}
+#Calculate the MSE on the training set
+pred_tree_training = predict(tree_model, cleaned_training)
+mean((pred_tree_training - cleaned_training %>% pull(selling_price))^2)
+# Calculate MSE, performance of the test set
+pred_tree_test = predict(tree_model, cleaned_test)
+mean((pred_tree_test - cleaned_test %>% pull(selling_price))^2)
+
+results_test_tree <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_tree_test)
+
+#Scatter Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test_tree, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set") +
+  theme_minimal()
+```
+
+## c.	Based on cross-validation (5 folds), check for the best size of the tree and prune it accordingly
+```{r}
+# Perform cross-validation to select the optimal tree size
+cv_tree <- cv.tree(tree_model)
+plot(cv_tree$size, cv_tree$dev, type = "b")
+#Identify the tree size with the lowest cross-validated error
+#best_tree_size <- which.min(cv_tree$dev)
+```
+
+In the cv plot, it can be seen that the pruning tree is the best at 5
+```{r}
+pruned_tree <- prune.tree(tree_model, best =5 )
+#Summary the prunned tree
+summary(pruned_tree)
+# Plot the prunned tree
+plot(pruned_tree) 
+text(pruned_tree, pretty = 0.5)
+```
+#d. Repeat steps a-b on your pruned tree. 
+```{r}
+## Calculate the MSE on the training dataset of prunned tree
+pred_pruned_tree_training = predict(pruned_tree, cleaned_training)
+mean((pred_pruned_tree_training - cleaned_training %>% pull(selling_price))^2)
+## Calculate the MSE on the test dataset of prunned tree
+pred_pruned_tree_test = predict(pruned_tree, newdata = cleaned_test)
+mean((pred_pruned_tree_test - cleaned_test$selling_price)^2)
+
+results_test_pruned_tree <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_pruned_tree_test)
+
+#Scatter Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test_pruned_tree, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set") +
+  theme_minimal()
+```
+
+
+
+# Question 5: Random Forest
+## Build the random forest on the traininging set
+```{r}
+factor_type = c("name","year","fuel","seller_type","transmission","owner","seats") 
+cleaned_training[factor_type] =lapply(cleaned_training[factor_type],as.character)
+cleaned_test[factor_type] = lapply(cleaned_test[factor_type],as.character)
+library(randomForest)
+rf_model <- randomForest(selling_price ~ ., data = cleaned_training, ntree = 10, mtry = sqrt(13))
+rf_model
+```
+
+
+# a. Using MSE, compare the traininging metric with the test metric and conclude about overfitting
+```{r}
+pred_rf_training <- predict(rf_model, cleaned_training)
+pred_rf_test <- predict(rf_model, cleaned_test)
+mse_rf_training <- mean((cleaned_training$selling_price - pred_rf_training)^2)
+mse_rf_test <- mean((cleaned_test$selling_price - pred_rf_test)^2)
+cat("Training MSE:", mse_rf_training, "\n")
+cat("Test MSE:", mse_rf_test, "\n")
+
+# Creating dataframe including actual and predicted price
+results_test <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_rf_test)
+
+# Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set") +
+  theme_minimal()
+```
+
+# b.	Obtain the feature importance of your model and comment it
+```{r}
+importance <- importance(rf_model)
+print(importance)
+```
+
+# c.	Based on cross-validation (5 folds), check for the best number of trees  and model it accordingly
+```{r}
+library(MASS)
+library(caret)
+control = trainControl(method = "cv", number = 5, search = "grid")
+tuneGrid1 = expand.grid(.mtry = (1:13))
+set.seed(1234)
+rf_best_mtry <- train (selling_price ~ .,
+data = cleaned_training,
+method = 'rf',
+metric = 'rmse',
+tuneGrid = tuneGrid1)
+rf_best_mtry
+```
+RMSE was used to select the optimal model using the smallest value.
+The final value used for the model was mtry = 13.
+
+```{r}
+best_ntrees = list()
+tuneGrid2 = expand.grid(.mtry = 13)
+for (ntree in seq(50, 500, 50)) {
+set.seed(1234)
+rf_best_ntrees = train(selling_price~.,
+data = cleaned_training,
+method = "rf",
+metric = "mse",
+tuneGrid = tuneGrid2,
+trControl = control,
+importance = TRUE,
+ntree = ntree)
+key = toString(ntree)
+best_ntrees[[key]] = rf_best_ntrees
+}
+rf_tree_results = resamples(best_ntrees)
+summary(rf_tree_results)
+```
+ As we can see, the best number of tree is 200, with the mean value of RMSE is 145430.9 Now I will try
+to build a random forest model with mtry = 10 and ntree = 200 to see if there are any improvement.
+
+```{r}
+#Build the random forest with new ntree and new mtry
+rf_model_new <- randomForest(selling_price ~ ., data = cleaned_training, ntree = 200, mtry = 10)
+rf_model_new
+```
+
+```{r}
+#Calculating MSE
+pred_rf_training_new <- predict(rf_model_new, cleaned_training)
+pred_rf_test_new <- predict(rf_model_new, cleaned_test)
+
+mse_rf_training_new <- mean((cleaned_training$selling_price - pred_rf_training_new)^2)
+mse_rf_test_new <- mean((cleaned_test$selling_price - pred_rf_test_new)^2)
+cat("Training MSE:", mse_rf_training_new, "\n")
+cat("Test MSE:", mse_rf_test_new, "\n")
+
+# Creating dataframe including actual and predicted price
+results_test_new <- data.frame(Actual = cleaned_test$selling_price, Predicted = pred_rf_test_new)
+
+# Plot of actual and predicted price
+library(ggplot2)
+
+ggplot(results_test_new, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted", title = "Predicted vs Actual on Test Set (New Model)") +
+  theme_minimal()
+
+
+```
+
+```{r}
+importance_new <- importance(rf_model_new)
+print(importance_new)
+```
+
