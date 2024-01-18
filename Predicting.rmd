@@ -34,8 +34,8 @@ library(tree)
 
 ```{r}
 #Import data
-training <- read.csv("C:/Users/84974/QuangAnhPhung/Documents/ACTUARY NĂM 4/PA (Predictive Analytics)/Final exam/training_set.csv")
-test <- read.csv("C:/Users/84974/QuangAnhPhung/Documents/ACTUARY NĂM 4/PA (Predictive Analytics)/Final exam/test_set.csv")
+training <- read.csv("training_set.csv")
+test <- read.csv("test_set.csv")
 attach(training)
 attach(test)
 ```
